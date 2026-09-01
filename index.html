@@ -21,7 +21,7 @@
         window.SUPABASE_URL = 'https://kuyffwsplojklxebvlbp.supabase.co';
         window.SUPABASE_ANON_KEY = 'sb_publishable__Wpn1N1uqPDqxy606FPkZw_3Xq679Ln';
 
-        // ساعة إنذار: لو الصفحة فضلت "جاري التحميل..." أكتر من 8 ثواني،
+        // ساعة إنذار: لو الصفحة فضلت "جاري التحميل..." أكتر من 12 ثانية،
         // يبقى فيه مشكلة في تحميل مكتبة Supabase من الإنترنت (شبكة بطيئة/محجوبة)
         // أو في تحميل app.js نفسه، ونوريك رسالة واضحة بدل الصفحة البيضاء.
         window.addEventListener('load', function () {
@@ -38,13 +38,21 @@
                             </p>
                         </div>`;
                 }
-            }, 8000);
+            }, 12000);
         });
     </script>
 
-    <!-- onerror هنا يعرض رسالة واضحة فورًا لو المكتبة فشلت تتحمل، بدل انتظار 8 ثواني -->
+    <!-- نحاول أولًا من jsdelivr، ولو فشل نجرّب unpkg تلقائيًا كمصدر بديل -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"
-            onerror="document.getElementById('app').innerHTML='<div style=&quot;max-width:600px;margin:40px auto;padding:20px;background:#fee;border:2px solid #f88;border-radius:8px;font-family:sans-serif;direction:rtl;text-align:right;&quot;><h2 style=&quot;color:#c00;&quot;>تعذّر تحميل مكتبة Supabase</h2><p style=&quot;color:#600;&quot;>تحقق من اتصال الإنترنت وأعد المحاولة.</p></div>'">
+            onerror="
+                var s = document.createElement('script');
+                s.src = 'https://unpkg.com/@supabase/supabase-js@2';
+                s.async = false;
+                s.onerror = function () {
+                    document.getElementById('app').innerHTML = '<div style=\'max-width:600px;margin:40px auto;padding:20px;background:#fee;border:2px solid #f88;border-radius:8px;font-family:sans-serif;direction:rtl;text-align:right;\'><h2 style=\'color:#c00;\'>تعذّر تحميل مكتبة Supabase من مصدرين مختلفين</h2><p style=\'color:#600;\'>المشكلة على الأرجح في الشبكة نفسها. جرّب شبكة إنترنت مختلفة تمامًا (واي فاي بدل بيانات الموبايل أو العكس).</p></div>';
+                };
+                document.head.appendChild(s);
+            ">
     </script>
 
     <script src="app.js"
