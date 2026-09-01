@@ -1,4 +1,33 @@
-const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+// عرض أي خطأ في بداية التشغيل مكتوبًا على الصفحة نفسها، بدل ما تفضل الشاشة
+// بيضاء من غير أي سبب ظاهر (أخطاء البداية عادةً بتروح في console المتصفح بس،
+// وده صعب توصله من الموبايل).
+function showStartupError(title, detail) {
+    const el = document.getElementById('app');
+    if (el) {
+        el.innerHTML = `
+            <div style="max-width:600px;margin:40px auto;padding:20px;background:#fee;border:2px solid #f88;border-radius:8px;font-family:sans-serif;direction:rtl;text-align:right;">
+                <h2 style="color:#c00;margin-top:0;">${title}</h2>
+                <p style="color:#600;white-space:pre-wrap;">${detail}</p>
+            </div>`;
+    }
+}
+
+let supabase;
+try {
+    if (!window.supabase) {
+        throw new Error('مكتبة Supabase لم تُحمَّل من الإنترنت. تحقق من اتصالك، أو أن سطر <script src="...supabase-js@2"> موجود في index.html قبل app.js.');
+    }
+    if (!window.SUPABASE_URL || window.SUPABASE_URL.includes('YOUR-PROJECT')) {
+        throw new Error('لم تضع رابط مشروعك (SUPABASE_URL) في index.html بعد.');
+    }
+    if (!window.SUPABASE_ANON_KEY || window.SUPABASE_ANON_KEY.includes('YOUR-ANON')) {
+        throw new Error('لم تضع مفتاح anon key (SUPABASE_ANON_KEY) في index.html بعد.');
+    }
+    supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
+} catch (e) {
+    showStartupError('فشل الاتصال بـ Supabase', e.message);
+    throw e;
+}
 
 class ClinicApp {
     constructor() {
@@ -6,11 +35,15 @@ class ClinicApp {
         this.profile = null;
         this.currentPage = 'login';
         this.selectedPatient = null;
-        this.init();
+        this.init().catch((e) => {
+            console.error(e);
+            showStartupError('حدث خطأ أثناء تحميل التطبيق', e.message || String(e));
+        });
     }
 
     async init() {
-        const { data } = await supabase.auth.getSession();
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
         this.session = data.session;
         if (this.session) {
             await this.loadProfile();
