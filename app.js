@@ -1,40 +1,42 @@
-const API_URL = (window.CLINICFLOW_API_URL) || 'http://localhost:8000/api/v1';
+const supabase = window.supabase.createClient(window.SUPABASE_URL, window.SUPABASE_ANON_KEY);
 
 class ClinicApp {
     constructor() {
-        this.token = localStorage.getItem('clinicflow_token') || null;
-        this.currentPage = this.token ? 'dashboard' : 'login';
+        this.session = null;
+        this.profile = null;
+        this.currentPage = 'login';
         this.selectedPatient = null;
         this.init();
     }
 
-    init() {
+    async init() {
+        const { data } = await supabase.auth.getSession();
+        this.session = data.session;
+        if (this.session) {
+            await this.loadProfile();
+        }
+        this.currentPage = this.profile ? 'dashboard' : (this.session ? 'complete-signup' : 'login');
         this.render();
-        if (this.token) this.loadDashboard();
+        if (this.currentPage === 'dashboard') this.loadDashboard();
+
+        supabase.auth.onAuthStateChange((_event, session) => {
+            this.session = session;
+        });
     }
 
-    // ---------- API helper ----------
-    async api(path, options = {}) {
-        const headers = options.headers || {};
-        if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
-        if (options.body && !(options.body instanceof URLSearchParams)) {
-            headers['Content-Type'] = 'application/json';
-        }
-        const res = await fetch(`${API_URL}${path}`, { ...options, headers });
-        if (res.status === 401) {
-            this.logout();
-            throw new Error('Unauthorized');
-        }
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({ detail: 'خطأ غير متوقع' }));
-            throw new Error(err.detail || 'خطأ غير متوقع');
-        }
-        return res.status === 204 ? null : res.json();
+    async loadProfile() {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', this.session.user.id)
+            .maybeSingle();
+        if (!error) this.profile = data;
     }
 
     logout() {
-        this.token = null;
-        localStorage.removeItem('clinicflow_token');
+        supabase.auth.signOut();
+        this.session = null;
+        this.profile = null;
         this.currentPage = 'login';
         this.render();
     }
@@ -43,35 +45,44 @@ class ClinicApp {
     async login(event) {
         event.preventDefault();
         const form = new FormData(event.target);
-        const body = new URLSearchParams();
-        body.set('username', form.get('username'));
-        body.set('password', form.get('password'));
-        try {
-            const data = await this.api('/auth/login', { method: 'POST', body });
-            this.token = data.access_token;
-            localStorage.setItem('clinicflow_token', this.token);
-            this.navigate('dashboard');
-        } catch (e) {
-            alert('فشل تسجيل الدخول: ' + e.message);
-        }
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email: form.get('email'),
+            password: form.get('password'),
+        });
+        if (error) { alert('فشل تسجيل الدخول: ' + error.message); return; }
+        this.session = data.session;
+        await this.loadProfile();
+        this.navigate(this.profile ? 'dashboard' : 'complete-signup');
     }
 
-    async registerClinic(event) {
+    async registerAccount(event) {
         event.preventDefault();
         const form = new FormData(event.target);
-        const params = new URLSearchParams({
-            clinic_name: form.get('clinic_name'),
-            admin_full_name: form.get('admin_full_name'),
-            admin_username: form.get('admin_username'),
-            admin_password: form.get('admin_password'),
+        const { data, error } = await supabase.auth.signUp({
+            email: form.get('email'),
+            password: form.get('password'),
         });
-        try {
-            await this.api(`/auth/register-clinic?${params.toString()}`, { method: 'POST' });
-            alert('تم إنشاء العيادة بنجاح، سجّل الدخول الآن');
+        if (error) { alert('فشل إنشاء الحساب: ' + error.message); return; }
+
+        if (!data.session) {
+            alert('تم إنشاء الحساب. تحقق من بريدك الإلكتروني لتأكيد الحساب، ثم سجّل الدخول.');
             this.navigate('login');
-        } catch (e) {
-            alert('فشل إنشاء العيادة: ' + e.message);
+            return;
         }
+        this.session = data.session;
+        this._pendingClinicName = form.get('clinic_name');
+        this._pendingAdminName = form.get('admin_full_name');
+        await this.finishClinicRegistration();
+    }
+
+    async finishClinicRegistration() {
+        const { error } = await supabase.rpc('register_clinic', {
+            p_clinic_name: this._pendingClinicName,
+            p_admin_full_name: this._pendingAdminName,
+        });
+        if (error) { alert('فشل إنشاء العيادة: ' + error.message); return; }
+        await this.loadProfile();
+        this.navigate('dashboard');
     }
 
     // ---------- Navigation ----------
@@ -87,62 +98,70 @@ class ClinicApp {
 
     // ---------- Dashboard ----------
     async loadDashboard() {
-        try {
-            const stats = await this.api('/dashboard/stats');
-            document.getElementById('today-appointments').textContent = stats.today_appointments ?? 0;
-            document.getElementById('total-patients').textContent = stats.total_patients ?? 0;
-            document.getElementById('total-visits').textContent = stats.total_visits ?? 0;
-            document.getElementById('active-pregnancies').textContent = stats.active_pregnancies ?? 0;
-        } catch (e) { console.error(e); }
+        const clinicId = this.profile.clinic_id;
+        const today = new Date();
+        const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+        const endOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).toISOString();
 
-        try {
-            const pregnancies = await this.api('/pregnancies/active');
-            const el = document.getElementById('active-pregnancies-list');
-            if (el) {
-                el.innerHTML = pregnancies.length
-                    ? pregnancies.map(p => `
-                        <div class="flex justify-between items-center border-b py-2">
-                            <span>مريضة #${p.patient_id}</span>
-                            <span class="text-sm text-gray-600">
-                                أسبوع ${p.current_gestational_age_weeks ?? '-'} +
-                                ${p.current_gestational_age_days ?? 0} يوم
-                            </span>
-                            <span class="text-xs text-gray-500">EDD: ${p.edd_date ? new Date(p.edd_date).toLocaleDateString('ar-EG') : '-'}</span>
-                        </div>`).join('')
-                    : '<p class="text-gray-500">لا توجد حالات حمل نشطة</p>';
-            }
-        } catch (e) { console.error(e); }
+        const [{ count: todayAppointments }, { count: totalPatients }, { count: totalVisits }, { count: activePregnancies }] = await Promise.all([
+            supabase.from('appointments').select('*', { count: 'exact', head: true }).gte('start_time', startOfDay).lt('start_time', endOfDay),
+            supabase.from('patients').select('*', { count: 'exact', head: true }),
+            supabase.from('visits').select('*', { count: 'exact', head: true }),
+            supabase.from('pregnancies').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+        ]);
+
+        document.getElementById('today-appointments').textContent = todayAppointments ?? 0;
+        document.getElementById('total-patients').textContent = totalPatients ?? 0;
+        document.getElementById('total-visits').textContent = totalVisits ?? 0;
+        document.getElementById('active-pregnancies').textContent = activePregnancies ?? 0;
+
+        const { data: pregnancies } = await supabase
+            .from('active_pregnancies_view')
+            .select('*, patients(name)')
+            .order('edd_date', { ascending: true });
+
+        const el = document.getElementById('active-pregnancies-list');
+        if (el) {
+            el.innerHTML = (pregnancies && pregnancies.length)
+                ? pregnancies.map(p => `
+                    <div class="flex justify-between items-center border-b py-2">
+                        <span>${p.patients?.name || 'مريضة'}</span>
+                        <span class="text-sm text-gray-600">أسبوع ${p.current_ga_weeks ?? '-'} + ${p.current_ga_days ?? 0} يوم</span>
+                        <span class="text-xs text-gray-500">EDD: ${p.edd_date ? new Date(p.edd_date).toLocaleDateString('ar-EG') : '-'}</span>
+                    </div>`).join('')
+                : '<p class="text-gray-500">لا توجد حالات حمل نشطة</p>';
+        }
     }
 
     // ---------- Patients ----------
     async loadPatients() {
-        try {
-            const patients = await this.api('/patients');
-            this.renderPatients(patients);
-        } catch (e) { console.error(e); }
+        const { data, error } = await supabase.from('patients').select('*').order('created_at', { ascending: false });
+        if (error) { console.error(error); return; }
+        this.renderPatients(data);
     }
 
     async createPatient(event) {
         event.preventDefault();
         const form = new FormData(event.target);
+
+        const { data: branches } = await supabase.from('branches').select('id').eq('clinic_id', this.profile.clinic_id).limit(1);
+        const branchId = branches && branches[0] ? branches[0].id : null;
+
         const payload = {
-            branch_id: 1,
+            clinic_id: this.profile.clinic_id,
+            branch_id: branchId,
             name: form.get('name'),
             gender: form.get('gender'),
             phone: form.get('phone'),
-            email: form.get('email') || null,
             date_of_birth: form.get('date_of_birth') || null,
             allergies: form.get('allergies') || null,
             chronic_conditions: form.get('chronic_conditions') || null,
         };
-        try {
-            const patient = await this.api('/patients', { method: 'POST', body: JSON.stringify(payload) });
-            alert('تم إضافة المريضة/المريض بنجاح! رقم الملف: ' + patient.patient_number);
-            event.target.reset();
-            this.loadPatients();
-        } catch (e) {
-            alert('حدث خطأ: ' + e.message);
-        }
+        const { data, error } = await supabase.from('patients').insert(payload).select().single();
+        if (error) { alert('حدث خطأ: ' + error.message); return; }
+        alert('تم إضافة المريضة/المريض بنجاح! رقم الملف: ' + data.patient_number);
+        event.target.reset();
+        this.loadPatients();
     }
 
     renderPatients(patients) {
@@ -171,49 +190,46 @@ class ClinicApp {
         });
     }
 
-    // ---------- Patient detail: visits + pregnancy + chronic vitals ----------
+    // ---------- Patient detail ----------
     async loadPatientDetail() {
         const id = this.selectedPatient?.id;
         if (!id) return;
-        try {
-            const patient = await this.api(`/patients/${id}`);
+
+        const { data: patient } = await supabase.from('patients').select('*').eq('id', id).single();
+        if (patient) {
             document.getElementById('patient-detail-header').innerHTML = `
                 <h2 class="text-xl font-bold">${patient.name}</h2>
                 <p class="text-sm text-gray-600">رقم الملف: ${patient.patient_number} — ${patient.phone || ''}</p>
                 ${patient.allergies ? `<p class="text-sm text-red-600">حساسية: ${patient.allergies}</p>` : ''}
             `;
-        } catch (e) { console.error(e); }
+        }
 
-        try {
-            const visits = await this.api(`/visits/patient/${id}`);
-            document.getElementById('patient-visits').innerHTML = visits.length
-                ? visits.map(v => `
-                    <div class="border-b py-2">
-                        <div class="flex justify-between">
-                            <span class="font-semibold">${v.diagnosis || v.chief_complaint}</span>
-                            <span class="text-xs text-gray-500">${new Date(v.created_at).toLocaleDateString('ar-EG')}</span>
-                        </div>
-                        ${v.bp_systolic ? `<p class="text-sm text-gray-600">ضغط: ${v.bp_systolic}/${v.bp_diastolic}</p>` : ''}
-                    </div>`).join('')
-                : '<p class="text-gray-500">لا توجد زيارات مسجلة</p>';
-        } catch (e) { console.error(e); }
+        const { data: visits } = await supabase.from('visits').select('*').eq('patient_id', id).order('created_at', { ascending: false });
+        document.getElementById('patient-visits').innerHTML = (visits && visits.length)
+            ? visits.map(v => `
+                <div class="border-b py-2">
+                    <div class="flex justify-between">
+                        <span class="font-semibold">${v.diagnosis || v.chief_complaint}</span>
+                        <span class="text-xs text-gray-500">${new Date(v.created_at).toLocaleDateString('ar-EG')}</span>
+                    </div>
+                    ${v.bp_systolic ? `<p class="text-sm text-gray-600">ضغط: ${v.bp_systolic}/${v.bp_diastolic}</p>` : ''}
+                </div>`).join('')
+            : '<p class="text-gray-500">لا توجد زيارات مسجلة</p>';
 
-        try {
-            const readings = await this.api(`/chronic/readings/patient/${id}`);
-            document.getElementById('patient-vitals').innerHTML = readings.length
-                ? readings.map(r => `
-                    <div class="border-b py-2 flex justify-between">
-                        <span>
-                            ${r.reading_type === 'blood_pressure' ? `ضغط: ${r.systolic}/${r.diastolic}` : ''}
-                            ${r.reading_type === 'blood_glucose' ? `سكر: ${r.glucose_value} (${r.glucose_context || ''})` : ''}
-                            ${!['blood_pressure', 'blood_glucose'].includes(r.reading_type) ? `${r.reading_type}: ${r.value ?? ''} ${r.unit ?? ''}` : ''}
-                        </span>
-                        <span class="text-xs ${r.is_abnormal === 'high' || r.is_abnormal === 'critical' ? 'text-red-600' : 'text-gray-500'}">
-                            ${new Date(r.reading_date).toLocaleDateString('ar-EG')} ${r.is_abnormal ? '· ' + r.is_abnormal : ''}
-                        </span>
-                    </div>`).join('')
-                : '<p class="text-gray-500">لا توجد قياسات مسجلة</p>';
-        } catch (e) { console.error(e); }
+        const { data: readings } = await supabase.from('vital_readings').select('*').eq('patient_id', id).order('reading_date', { ascending: false }).limit(50);
+        document.getElementById('patient-vitals').innerHTML = (readings && readings.length)
+            ? readings.map(r => `
+                <div class="border-b py-2 flex justify-between">
+                    <span>
+                        ${r.reading_type === 'blood_pressure' ? `ضغط: ${r.systolic}/${r.diastolic}` : ''}
+                        ${r.reading_type === 'blood_glucose' ? `سكر: ${r.glucose_value} (${r.glucose_context || ''})` : ''}
+                        ${!['blood_pressure', 'blood_glucose'].includes(r.reading_type) ? `${r.reading_type}: ${r.value ?? ''} ${r.unit ?? ''}` : ''}
+                    </span>
+                    <span class="text-xs ${r.is_abnormal === 'high' || r.is_abnormal === 'critical' ? 'text-red-600' : 'text-gray-500'}">
+                        ${new Date(r.reading_date).toLocaleDateString('ar-EG')} ${r.is_abnormal ? '· ' + r.is_abnormal : ''}
+                    </span>
+                </div>`).join('')
+            : '<p class="text-gray-500">لا توجد قياسات مسجلة</p>';
     }
 
     async addVitalReading(event) {
@@ -221,7 +237,7 @@ class ClinicApp {
         const id = this.selectedPatient?.id;
         const form = new FormData(event.target);
         const type = form.get('reading_type');
-        const payload = { patient_id: parseInt(id), reading_type: type };
+        const payload = { clinic_id: this.profile.clinic_id, patient_id: id, reading_type: type, recorded_by: this.profile.id };
         if (type === 'blood_pressure') {
             payload.systolic = parseFloat(form.get('systolic'));
             payload.diastolic = parseFloat(form.get('diastolic'));
@@ -232,39 +248,34 @@ class ClinicApp {
             payload.value = parseFloat(form.get('value'));
             payload.unit = form.get('unit');
         }
-        try {
-            await this.api('/chronic/readings', { method: 'POST', body: JSON.stringify(payload) });
-            event.target.reset();
-            this.loadPatientDetail();
-        } catch (e) {
-            alert('خطأ: ' + e.message);
-        }
+        const { error } = await supabase.from('vital_readings').insert(payload);
+        if (error) { alert('خطأ: ' + error.message); return; }
+        event.target.reset();
+        this.loadPatientDetail();
     }
 
     // ---------- Appointments ----------
     async loadAppointments() {
-        try {
-            const appointments = await this.api('/appointments');
-            const container = document.getElementById('appointments-list');
-            container.innerHTML = appointments.length
-                ? appointments.map(a => `
-                    <div class="bg-white p-4 rounded-lg shadow mb-3">
-                        <div class="flex justify-between items-center">
-                            <div>
-                                <h3 class="font-bold">مريض #${a.patient_id}</h3>
-                                <p class="text-sm text-gray-600">${new Date(a.start_time).toLocaleString('ar-EG')}</p>
-                            </div>
-                            <span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">${a.status}</span>
+        const { data } = await supabase.from('appointments').select('*').order('start_time', { ascending: true });
+        const container = document.getElementById('appointments-list');
+        container.innerHTML = (data && data.length)
+            ? data.map(a => `
+                <div class="bg-white p-4 rounded-lg shadow mb-3">
+                    <div class="flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold">موعد</h3>
+                            <p class="text-sm text-gray-600">${new Date(a.start_time).toLocaleString('ar-EG')}</p>
                         </div>
-                    </div>`).join('')
-                : '<p class="text-gray-500">لا توجد مواعيد</p>';
-        } catch (e) { console.error(e); }
+                        <span class="bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm">${a.status}</span>
+                    </div>
+                </div>`).join('')
+            : '<p class="text-gray-500">لا توجد مواعيد</p>';
     }
 
     // ---------- Render ----------
     render() {
         const app = document.getElementById('app');
-        if (!this.token) {
+        if (!this.profile) {
             app.innerHTML = this.renderAuthPages();
             this.bindAuthForms();
             return;
@@ -299,8 +310,8 @@ class ClinicApp {
                     <form id="register-form" class="space-y-4">
                         <input name="clinic_name" placeholder="اسم العيادة" required class="w-full px-4 py-2 border rounded-lg">
                         <input name="admin_full_name" placeholder="اسم المدير/الطبيب" required class="w-full px-4 py-2 border rounded-lg">
-                        <input name="admin_username" placeholder="اسم المستخدم" required class="w-full px-4 py-2 border rounded-lg">
-                        <input name="admin_password" type="password" placeholder="كلمة المرور" required class="w-full px-4 py-2 border rounded-lg">
+                        <input name="email" type="email" placeholder="البريد الإلكتروني" required class="w-full px-4 py-2 border rounded-lg">
+                        <input name="password" type="password" placeholder="كلمة المرور (6 أحرف على الأقل)" required minlength="6" class="w-full px-4 py-2 border rounded-lg">
                         <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600">إنشاء العيادة</button>
                     </form>
                     <p class="mt-4 text-sm text-center">
@@ -314,7 +325,7 @@ class ClinicApp {
             <div class="bg-white p-8 rounded-lg shadow w-full max-w-md">
                 <h1 class="text-2xl font-bold text-blue-600 mb-6">🏥 ClinicFlow — تسجيل الدخول</h1>
                 <form id="login-form" class="space-y-4">
-                    <input name="username" placeholder="اسم المستخدم" required class="w-full px-4 py-2 border rounded-lg">
+                    <input name="email" type="email" placeholder="البريد الإلكتروني" required class="w-full px-4 py-2 border rounded-lg">
                     <input name="password" type="password" placeholder="كلمة المرور" required class="w-full px-4 py-2 border rounded-lg">
                     <button type="submit" class="w-full bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600">دخول</button>
                 </form>
@@ -329,7 +340,7 @@ class ClinicApp {
         const loginForm = document.getElementById('login-form');
         if (loginForm) loginForm.addEventListener('submit', (e) => this.login(e));
         const registerForm = document.getElementById('register-form');
-        if (registerForm) registerForm.addEventListener('submit', (e) => this.registerClinic(e));
+        if (registerForm) registerForm.addEventListener('submit', (e) => this.registerAccount(e));
         const goRegister = document.getElementById('go-register');
         if (goRegister) goRegister.addEventListener('click', (e) => { e.preventDefault(); this.currentPage = 'register'; this.render(); });
         const goLogin = document.getElementById('go-login');
