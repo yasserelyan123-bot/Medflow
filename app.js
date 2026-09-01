@@ -46,9 +46,23 @@ class ClinicApp {
     }
 
     async init() {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) throw error;
-        this.session = data.session;
+        // بعض متصفحات الموبايل (خصوصًا المتصفحات المدمجة جوه تطبيقات زي
+        // فيسبوك/واتساب) بتعلّق صامتة عند استدعاء getSession() بسبب مشاكل
+        // في دعم Web Locks API. نضع حد أقصى 5 ثواني: لو تجاوزناه نكمّل
+        // عادي بافتراض عدم وجود جلسة، بدل ما نفضل معلّقين للأبد.
+        let session = null;
+        try {
+            const result = await Promise.race([
+                supabase.auth.getSession(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+            ]);
+            if (result.error) throw result.error;
+            session = result.data.session;
+        } catch (e) {
+            console.warn('getSession timed out or failed, continuing without session:', e.message);
+        }
+
+        this.session = session;
         if (this.session) {
             await this.loadProfile();
         }
