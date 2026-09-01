@@ -1,19 +1,29 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
-from app.core.database import Base
+
+class PrescriptionCreate(BaseModel):
+    visit_id: int
+    drug_name: str
+    strength: Optional[str] = None
+    form: Optional[str] = None
+    dose: Optional[str] = None
+    frequency: Optional[str] = None
+    duration_days: Optional[int] = None
+    instructions: Optional[str] = None
 
 
-class Prescription(Base):
-    __tablename__ = "prescriptions"
+class PrescriptionRead(BaseModel):
+    id: int
+    visit_id: int
+    drug_name: str
+    strength: Optional[str] = None
+    dose: Optional[str] = None
+    frequency: Optional[str] = None
+    duration_days: Optional[int] = None
+    instructions: Optional[str] = None
+    created_at: datetime
 
-    id = Column(Integer, primary_key=True, index=True)
-    visit_id = Column(Integer, ForeignKey("visits.id"), nullable=False, index=True)
-    drug_name = Column(String, nullable=False)
-    strength = Column(String, nullable=True)
-    form = Column(String, nullable=True)
-    dose = Column(String, nullable=True)
-    frequency = Column(String, nullable=True)
-    duration_days = Column(Integer, nullable=True)
-    instructions = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    class Config:
+        from_attributes = True
