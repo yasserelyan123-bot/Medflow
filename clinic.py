@@ -1,20 +1,15 @@
-from pydantic import BaseModel
-from typing import Optional
+from sqlalchemy import Column, Integer, String, DateTime
+from datetime import datetime
+
+from app.core.database import Base
 
 
-class ClinicCreate(BaseModel):
-    name: str
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    address: Optional[str] = None
+class Clinic(Base):
+    __tablename__ = "clinics"
 
-
-class ClinicRead(BaseModel):
-    id: int
-    name: str
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    address: Optional[str] = None
-
-    class Config:
-        from_attributes = True
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    phone = Column(String, nullable=True)
+    email = Column(String, nullable=True)
+    address = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
