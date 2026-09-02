@@ -24,6 +24,32 @@ function showStartupError(title, detail) {
     }
 }
 
+// بديل عن alert() المدمجة في المتصفح — بعض متصفحات الموبايل بتمنع أو
+// بتخفي نوافذ alert() الافتراضية، فبدل ما نعتمد عليها، نعرض الرسالة
+// كشريط ملوّن ثابت فوق الصفحة، مضمون الظهور دايمًا.
+function showMessage(text, type = 'info') {
+    const colors = {
+        error: { bg: '#fee', border: '#f88', text: '#c00' },
+        success: { bg: '#efe', border: '#8c8', text: '#070' },
+        info: { bg: '#eef', border: '#88c', text: '#007' },
+    };
+    const c = colors[type] || colors.info;
+    let banner = document.getElementById('clinicflow-message-banner');
+    if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'clinicflow-message-banner';
+        banner.style.cssText = `position:sticky;top:0;z-index:9999;margin:0;padding:14px 20px;font-family:sans-serif;direction:rtl;text-align:right;font-size:15px;line-height:1.5;`;
+        document.body.prepend(banner);
+    }
+    banner.style.background = c.bg;
+    banner.style.borderBottom = `2px solid ${c.border}`;
+    banner.style.color = c.text;
+    banner.textContent = text;
+    banner.style.display = 'block';
+    clearTimeout(window.__clinicflow_msg_timeout__);
+    window.__clinicflow_msg_timeout__ = setTimeout(() => { banner.style.display = 'none'; }, 8000);
+}
+
 // ---------- طبقة اتصال خام بـ Supabase (بدون أي مكتبة) ----------
 
 async function authRequest(path, body) {
@@ -163,7 +189,7 @@ class ClinicApp {
             await this.loadProfile();
             this.navigate(this.profile ? 'dashboard' : 'complete-signup');
         } catch (e) {
-            alert('فشل تسجيل الدخول: ' + e.message);
+            showMessage('فشل تسجيل الدخول: ' + e.message, 'error');
         }
     }
 
@@ -176,7 +202,7 @@ class ClinicApp {
                 password: form.get('password'),
             });
             if (!result.access_token) {
-                alert('تم إنشاء الحساب. تحقق من بريدك الإلكتروني لتأكيد الحساب، ثم سجّل الدخول.');
+                showMessage('تم إنشاء الحساب. تحقق من بريدك الإلكتروني لتأكيد الحساب، ثم سجّل الدخول. (إذا لم تصلك رسالة، تأكد أن "Confirm email" مطفأ في إعدادات Supabase)', 'info');
                 this.navigate('login');
                 return;
             }
@@ -186,7 +212,7 @@ class ClinicApp {
             this._pendingAdminName = form.get('admin_full_name');
             await this.finishClinicRegistration();
         } catch (e) {
-            alert('فشل إنشاء الحساب: ' + e.message);
+            showMessage('فشل إنشاء الحساب: ' + e.message, 'error');
         }
     }
 
@@ -199,7 +225,7 @@ class ClinicApp {
             await this.loadProfile();
             this.navigate('dashboard');
         } catch (e) {
-            alert('فشل إنشاء العيادة: ' + e.message);
+            showMessage('فشل إنشاء العيادة: ' + e.message, 'error');
         }
     }
 
@@ -291,11 +317,11 @@ class ClinicApp {
                 extraHeaders: { 'Prefer': 'return=representation' },
             });
             const patient = rows[0];
-            alert('تم إضافة المريضة/المريض بنجاح! رقم الملف: ' + patient.patient_number);
+            showMessage('تم إضافة المريضة/المريض بنجاح! رقم الملف: ' + patient.patient_number, 'success');
             event.target.reset();
             this.loadPatients();
         } catch (e) {
-            alert('حدث خطأ: ' + e.message);
+            showMessage('حدث خطأ: ' + e.message, 'error');
         }
     }
 
